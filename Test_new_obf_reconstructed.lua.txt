@@ -1,0 +1,2156 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+
+local Window = WindUI:CreateWindow({
+    Title = "GuBoss x Hub | Free",
+    Icon = "rbxassetid://110538801742199",
+    Author = "[🔫]-Arsenal",
+    Folder = "boss ter",
+
+    Size = UDim2.fromOffset(580, 460),
+    MinSize = Vector2.new(560, 350),
+    MaxSize = Vector2.new(850, 560),
+    Transparent = true,
+    Theme = "Dark",
+    Resizable = true,
+    SideBarWidth = 200,
+    BackgroundImageTransparency = 0.42,
+    HideSearchBar = true,
+    ScrollBarEnabled = false,
+    User = {
+        Enabled = true,
+        Anonymous = false,
+        Name = LocalPlayer.Name,
+        Image = "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=150&h=150",
+        Callback = function()
+            print("User Profile Clicked")
+        end,
+    },
+})
+
+Window:Tag({
+    Title = "Arsenal",
+    Icon = "github",
+    Color = Color3.fromHex("#30ff6a"),
+    Radius = 13,
+})
+
+Window:EditOpenButton({
+    Title = "GuBoss x Hub | Arsenal",
+    Icon = "rbxassetid://110538801742199",
+    CornerRadius = UDim.new(0,16),
+    StrokeThickness = 2,
+    Color = ColorSequence.new(
+        Color3.fromHex("FF0F7B"), 
+        Color3.fromHex("F89B29")
+    ),
+    OnlyMobile = false,
+    Enabled = true,
+    Draggable = true,
+})
+
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == Enum.KeyCode.T then
+        Window:Toggle()
+    end
+end)
+
+local Tab = Window:Tab({Title = "Main", Icon = "house"})
+
+Tab:Section({
+    Title = 'walk to player:',
+})
+
+local PathfindingService = game:GetService('PathfindingService')
+local Players = game:GetService('Players')
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local Client = Players.LocalPlayer
+
+-- [[ ระบบดึงตัวละครรองรับทุกแมพ ]]
+local Character = Client.Character or Client.CharacterAdded:Wait()
+local Humanoid = Character:WaitForChild("Humanoid")
+local RootPart = Character:WaitForChild("HumanoidRootPart")
+
+Client.CharacterAdded:Connect(function(newChar)
+    Character = newChar
+    Humanoid = newChar:WaitForChild("Humanoid")
+    RootPart = newChar:WaitForChild("HumanoidRootPart")
+end)
+
+-- ตัวแปรตั้งค่าต่างๆ
+local TeamCheckEnabled = false
+local MoveSpeed = 60
+local TeleportCoroutine = nil
+local IsTraveling = false
+
+local blacklistedPlayers = {}
+
+-- [[ ระบบสร้างเส้นทางด้วย Part วางบนพื้น ]]
+local PathPartsFolder = Instance.new("Folder")
+PathPartsFolder.Name = "VisualPathParts"
+PathPartsFolder.Parent = Workspace
+
+local function CreatePathPart()
+    local part = Instance.new("Part")
+    part.Size = Vector3.new(0.6, 0.2, 0.6)
+    part.Anchored = true
+    part.CanCollide = false
+    part.CastShadow = false
+    part.Material = Enum.Material.Neon
+    part.Color = Color3.fromRGB(0, 255, 255)
+    part.Parent = PathPartsFolder
+    return part
+end
+
+local activePathParts = {}
+
+local function DrawPathParts(waypoints)
+    for _, p in ipairs(activePathParts) do
+        p:Destroy()
+    end
+    activePathParts = {}
+
+    for i, wp in ipairs(waypoints) do
+        local part = CreatePathPart()
+        part.Position = wp.Position + Vector3.new(0, 0.1, 0)
+        table.insert(activePathParts, part)
+    end
+end
+
+local function ClearPathParts()
+    for _, p in ipairs(activePathParts) do
+        p:Destroy()
+    end
+    activePathParts = {}
+end
+
+-- [[ ฟังก์ชันตรวจสอบว่าอยู่ทีมเดียวกันหรือไม่ ]]
+local function isSameTeam(player)
+    if not TeamCheckEnabled then return false end
+    if player == Client then return true end
+    
+    if Client.Team and player.Team then
+        return Client.Team == player.Team
+    end
+    
+    local success, same = pcall(function()
+        if player.TeamColor and Client.TeamColor and player.TeamColor == Client.TeamColor then
+            return true
+        end
+        return false
+    end)
+    if success and same then return true end
+    
+    return false
+end
+
+-- [[ ฟังก์ชันตรวจสอบว่าเป้าหมายยังปกติและมีชีวิตอยู่หรือไม่ ]]
+local function IsTargetValid(player)
+    if not player or not player.Parent then return false end
+    if player.Character and player.Character:FindFirstChild("Humanoid") then
+        local h = player.Character.Humanoid
+        if h.Health <= 0 then
+            return false
+        end
+    else
+        return false
+    end
+    return true
+end
+
+-- [[ ฟังก์ชันค้นหาผู้เล่นที่ใกล้ที่สุด ]]
+local function GetClosestPlayer()
+    local closestPlayer = nil
+    local shortestDistance = math.huge
+    local myRoot = RootPart or (Client.Character and Client.Character:FindFirstChild("HumanoidRootPart"))
+    
+    if not myRoot then return nil end
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= Client and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            if not isSameTeam(player) and not blacklistedPlayers[player] then
+                local targetHumanoid = player.Character:FindFirstChild("Humanoid")
+                if targetHumanoid and targetHumanoid.Health > 0 then
+                    local targetRoot = player.Character.HumanoidRootPart
+                    local distance = (myRoot.Position - targetRoot.Position).Magnitude
+                    if distance < shortestDistance then
+                        shortestDistance = distance
+                        closestPlayer = player
+                    end
+                end
+            end
+        end
+    end
+
+    if not closestPlayer then
+        blacklistedPlayers = {}
+    end
+
+    return closestPlayer
+end
+
+-- [[ ระบบตรวจสอบโมดูลเน็ตสากล ]]
+local NetModule = nil
+pcall(function()
+    if ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("Core") then
+        local Core = ReplicatedStorage.Modules.Core
+        if Core:FindFirstChild("Net") then
+            NetModule = require(Core.Net)
+        end
+    end
+end)
+
+local function SendNetwork(...)
+    if NetModule and NetModule.send then
+        return NetModule.send(...)
+    end
+end
+
+local function GetCurrentMovementPart()
+    if Humanoid and Humanoid.SeatPart then
+        return Humanoid.SeatPart.AssemblyRootPart or Humanoid.SeatPart
+    end
+    return RootPart
+end
+
+local function ScanForObstacles(currentPart, direction)
+    if not currentPart then return false, Vector3.new(0,0,0) end
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {Character, currentPart.Parent}
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    local rayOrigin = currentPart.Position + Vector3.new(0, 1, 0)
+    local rayDirection = direction * 12
+    local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+    
+    if raycastResult then
+        return true, raycastResult.Normal
+    end
+    return false, Vector3.new(0,0,0)
+end
+
+-- ฟังก์ชันหลัก: ระบบวิ่งตามหาเป้าหมาย พร้อมสลับคนใหม่ทันทีถ้าคนเก่าตายหรือไปหาไม่ได้
+local function StartRelentlessHoverWalkLoop()
+    IsTraveling = true
+    local BaseHoverHeight = 4.0
+    local CurrentHoverHeight = BaseHoverHeight
+    
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2.0, 
+        AgentHeight = 6.0,
+        AgentCanJump = true,
+        AgentJumpHeight = 8.0,
+        AgentMaxSlope = 89,
+        Costs = { 
+            BlockedNode = math.huge, 
+            DoorArea = 1 
+        }
+    })
+
+    while IsTraveling and RootPart and Humanoid.Health > 0 do
+        local targetPlayer = GetClosestPlayer()
+        
+        if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local targetRootPart = targetPlayer.Character.HumanoidRootPart
+            local targetPos = targetRootPart.Position
+            
+            if (RootPart.Position - targetPos).Magnitude > 3.0 then
+                local currentStartPos = RootPart.Position
+                local success, errorMessage = pcall(function()
+                    path:ComputeAsync(currentStartPos, targetPos)
+                end)
+
+                if not success or path.Status ~= Enum.PathStatus.Success then
+                    blacklistedPlayers[targetPlayer] = true
+                    ClearPathParts()
+                    task.wait(0.2)
+                    continue
+                end
+
+                local waypoints = path:GetWaypoints()
+                DrawPathParts(waypoints)
+
+                local failedPathCount = 0
+                
+                for i = 1, #waypoints do
+                    if not IsTraveling or Humanoid.Health <= 0 then break end
+                    
+                    -- ตรวจสอบตลอดเวลาว่าเป้าหมายตายหรือยัง ถ้าตายให้รีบตัดลูปไปหาคนใหม่ทันที
+                    if not IsTargetValid(targetPlayer) then
+                        blacklistedPlayers[targetPlayer] = true
+                        ClearPathParts()
+                        break
+                    end
+                    
+                    local wp = waypoints[i]
+                    local currentTarget = Vector3.new(wp.Position.X, wp.Position.Y + CurrentHoverHeight, wp.Position.Z)
+
+                    local currentPart = GetCurrentMovementPart()
+                    if not currentPart then break end
+                    
+                    local startPos = currentPart.Position
+                    local direction = (currentTarget - startPos).Unit
+                    if tostring(direction) == "NAN" then direction = Vector3.new(0,0,0) end
+                    
+                    local distance = (currentTarget - startPos).Magnitude
+                    local movedDistance = 0
+                    local startTime = tick()
+                    local lastPosCheck = currentPart.Position
+                    local stuckTimeCheck = tick()
+                    
+                    while movedDistance < distance and IsTraveling do
+                        local dt = RunService.Heartbeat:Wait()
+                        
+                        -- เช็คสถานะเป้าหมายระหว่างเดินเข้าหา
+                        if not IsTargetValid(targetPlayer) then
+                            blacklistedPlayers[targetPlayer] = true
+                            ClearPathParts()
+                            break
+                        end
+                        
+                        currentPart = GetCurrentMovementPart()
+                        if not currentPart or not targetPlayer.Character or not targetPlayer.Character:FindFirstChild("HumanoidRootPart") then break end
+                        
+                        local currentTargetRoot = targetPlayer.Character.HumanoidRootPart
+                        local lookAtPos = Vector3.new(currentTargetRoot.Position.X, currentPart.Position.Y, currentTargetRoot.Position.Z)
+                        
+                        local isObstacleAhead, avoidanceNormal = ScanForObstacles(currentPart, direction)
+                        if isObstacleAhead then
+                            direction = (direction + avoidanceNormal * 0.6).Unit
+                            CurrentHoverHeight = BaseHoverHeight + 3.0 
+                        else
+                            CurrentHoverHeight = math.max(BaseHoverHeight, CurrentHoverHeight - (dt * 5))
+                        end
+                        
+                        local elapsedTime = tick() - startTime
+                        movedDistance = math.min(elapsedTime * MoveSpeed, distance)
+                        local newPos = startPos + (direction * movedDistance)
+                        
+                        if not Humanoid.SeatPart and Humanoid.Sit then 
+                            Humanoid.Sit = false 
+                        end
+                        
+                        if currentPart:IsA("BasePart") then
+                            currentPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                            currentPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                        end
+                        RootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        RootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                        
+                        if (lookAtPos - newPos).Magnitude > 0.01 then
+                            currentPart:PivotTo(CFrame.lookAt(newPos, lookAtPos))
+                        else
+                            currentPart:PivotTo(CFrame.new(newPos) * currentPart.CFrame.Rotation)
+                        end
+                        
+                        pcall(function()
+                            SendNetwork("set_sprinting_1", true)
+                        end)
+                        
+                        if tick() - stuckTimeCheck >= 0.8 then
+                            if (currentPart.Position - lastPosCheck).Magnitude < 1.0 then
+                                failedPathCount = failedPathCount + 1
+                                if failedPathCount > 2 then
+                                    blacklistedPlayers[targetPlayer] = true
+                                    break
+                                end
+                            end
+                            lastPosCheck = currentPart.Position
+                            stuckTimeCheck = tick()
+                        end
+                        
+                        if Humanoid.Health <= 0 then break end
+                    end
+                    
+                    if not IsTargetValid(targetPlayer) or failedPathCount > 2 then 
+                        break 
+                    end
+                end
+            else
+                ClearPathParts()
+                local currentPart = GetCurrentMovementPart()
+                if currentPart and targetRootPart then
+                    local lookAtPos = Vector3.new(targetRootPart.Position.X, currentPart.Position.Y, targetRootPart.Position.Z)
+                    if (lookAtPos - currentPart.Position).Magnitude > 0.01 then
+                        currentPart:PivotTo(CFrame.lookAt(currentPart.Position, lookAtPos))
+                    end
+                end
+                task.wait(0.05)
+            end
+        else
+            ClearPathParts()
+            task.wait(0.1)
+        end
+        
+        RunService.Heartbeat:Wait()
+    end
+
+    ClearPathParts()
+end
+
+-- ตัว Toggle สำหรับ Team Check
+Tab:Toggle({
+    Title = "Team Check",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        TeamCheckEnabled = v
+    end
+})
+
+-- ตัว Toggle หลักของ WindUI
+Tab:Toggle({
+    Title = "Walk to Player",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        if v then
+            IsTraveling = true
+            blacklistedPlayers = {}
+            if TeleportCoroutine then 
+                pcall(task.cancel, TeleportCoroutine) 
+            end
+            
+            TeleportCoroutine = task.spawn(StartRelentlessHoverWalkLoop)
+        else
+            IsTraveling = false
+            ClearPathParts()
+            if TeleportCoroutine then
+                pcall(task.cancel, TeleportCoroutine)
+                TeleportCoroutine = nil
+            end
+        end
+    end
+})
+
+Tab:Section({
+    Title = 'Prison life:',
+})
+
+-- ตัวแปรเปิด/ปิด Buff
+local buffEnabled = false
+
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+-- เก็บ Connection เพื่อยกเลิกได้เมื่อปิด Buff
+local connections = {}
+
+-- ฟังก์ชัน Buff ปืน
+local function BuffGun(tool)
+    if not buffEnabled then return end
+    if not tool or not tool:IsA("Tool") then return end
+
+    task.spawn(function()
+        task.wait(0.1)
+        pcall(function()
+            tool:SetAttribute("AutoFire", true)
+            tool:SetAttribute("FireRate", 0.001)
+            tool:SetAttribute("IsReloading", false)
+        end)
+    end)
+end
+
+-- ฟังก์ชันเชื่อม Backpack + Character ให้ Buff ตลอด
+local function SetupConnections()
+    -- ยกเลิก Connection เก่า
+    for _, conn in ipairs(connections) do
+        conn:Disconnect()
+    end
+    connections = {}
+
+    -- Buff ปืนใน Backpack ตอนนี้
+    for _, tool in ipairs(player.Backpack:GetChildren()) do
+        BuffGun(tool)
+    end
+
+    -- เมื่อมีปืนใหม่เข้ามา Backpack
+    table.insert(connections, player.Backpack.ChildAdded:Connect(function(tool)
+        BuffGun(tool)
+    end))
+
+    -- Buff ปืนที่อยู่ในมือ (Character)
+    if player.Character then
+        for _, tool in ipairs(player.Character:GetChildren()) do
+            BuffGun(tool)
+        end
+
+        -- เวลา Equip ของใหม่
+        table.insert(connections, player.Character.ChildAdded:Connect(function(tool)
+            BuffGun(tool)
+        end))
+    end
+end
+
+-- ต่อใหม่ทุกครั้งที่เกิดใหม่ (Respawn)
+table.insert(connections, player.CharacterAdded:Connect(function(char)
+    task.wait(0.5)
+    SetupConnections()
+end))
+
+----------------------------------------------------------------
+-- Toggle
+----------------------------------------------------------------
+Tab:Toggle({
+    Title = "Buff Bullet",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        buffEnabled = v   -- เปิด/ปิดจริง
+
+        if v then
+            print("Buff Enabled")
+            SetupConnections()  -- เซ็ตใหม่ทันที
+        else
+            print("Buff Disabled")
+            -- ถ้าต้องการ ลบ Buff จากปืนเก่าก็สามารถทำได้
+            -- แต่ปกติไม่ลบก็ได้เพราะ Toggle ปิดแล้วไม่ Buff ต่อ
+        end
+    end
+})
+
+Tab:Section({
+    Title = 'Zoom:',
+})
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+local enabled = false
+local connection = nil
+
+local yaw = 0
+local pitch = -15
+local distance = 10
+local height = 5 
+local sensitivity = 0.25
+
+Tab:Keybind({
+    Title = "Camera High",
+    Desc = "",
+    Value = "G",
+    Callback = function()
+        -- สลับสถานะเปิด/ปิดทุกครั้งที่กดปุ่ม
+        enabled = not enabled
+
+        if enabled then
+            player.CameraMaxZoomDistance = distance
+            player.CameraMinZoomDistance = distance
+            camera.CameraType = Enum.CameraType.Scriptable
+            UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+
+            if connection then
+                connection:Disconnect()
+            end
+
+            connection = RunService.RenderStepped:Connect(function()
+                local delta = UserInputService:GetMouseDelta()
+
+                yaw -= delta.X * sensitivity
+                pitch = math.clamp(
+                    pitch - delta.Y * sensitivity,
+                    -80,
+                    80
+                )
+
+                local character = player.Character
+                if not character or not character:FindFirstChild("HumanoidRootPart") then return end
+                local hrp = character.HumanoidRootPart
+
+                local rotation = CFrame.Angles(0, math.rad(yaw), 0) * CFrame.Angles(math.rad(pitch), 0, 0)
+                local focus = hrp.Position + Vector3.new(0, height, 0)
+                local camPos = focus + rotation:VectorToWorldSpace(Vector3.new(0, 0, distance))
+
+                camera.CFrame = CFrame.new(camPos, focus)
+            end)
+
+        else
+            -- คืนค่ากล้องกลับเป็นปกติเมื่อปิด
+            player.CameraMaxZoomDistance = 128
+            player.CameraMinZoomDistance = 0.5
+
+            if connection then
+                connection:Disconnect()
+                connection = nil
+            end
+
+            camera.CameraType = Enum.CameraType.Custom
+            UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+        end
+    end
+})
+
+Tab:Section({
+    Title = 'Character:',
+})
+
+Tab:Toggle({
+        Title = "WhiteGhost",
+        Desc = "",
+        Value = false,
+        Callback = function(v)
+            local player = game:GetService("Players").LocalPlayer
+            
+            if v then
+                _G.GhostActive = true
+                task.spawn(function()
+                    while _G.GhostActive do
+                        local character = player.Character
+                        if character and character:FindFirstChild("HumanoidRootPart") then
+                            -- ปิดการชนของชิ้นส่วนตัวเงาชั่วคราวเพื่อไม่ให้ขวาง
+                            character.Archivable = true
+                            local ghost = character:Clone()
+                            ghost.Name = "WhiteGhost"
+                            
+                            -- ลบสคริปต์หรือส่วนที่ไม่จำเป็นออกเพื่อกันบัณ
+                            for _, child in ipairs(ghost:GetDescendants()) do
+                                if child:IsA("Script") or child:IsA("LocalScript") or child:IsA("Humanoid") then
+                                    child:Destroy()
+                                elseif child:IsA("BasePart") then
+                                    child.Anchored = true
+                                    child.CanCollide = false
+                                    child.Material = Enum.Material.Neon
+                                    child.Color = Color3.fromRGB(255, 255, 255) -- สีขาว
+                                    child.Transparency = 0.9 -- ความโปร่งใสของเงา
+                                end
+                            end
+                            
+                            ghost.Parent = workspace
+                            
+                            -- ให้เงาหายไปเองหลังจาก 0.5 วินาที
+                            task.delay(0.5, function()
+                                if ghost then
+                                    ghost:Destroy()
+                                end
+                            end)
+                        end
+                        task.wait(0.2) -- ความถี่ในการสร้างเงาตามตัว
+                    end
+                end)
+            else
+                _G.GhostActive = false
+                -- ลบเงาที่ค้างอยู่ออกทั้งหมด
+                for _, obj in ipairs(workspace:GetChildren()) do
+                    if obj.Name == "WhiteGhost" then
+                        obj:Destroy()
+                    end
+                end
+            end
+        end
+    })
+
+Tab:Section({
+    Title = 'Fog:',
+})
+
+local atmosphere
+
+Tab:Toggle({
+    Title = "Purple Fog",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        if v then
+            if not atmosphere then
+                atmosphere = Instance.new("Atmosphere")
+                atmosphere.Name = "PurpleFog"
+                atmosphere.Parent = game:GetService("Lighting")
+            end
+
+            atmosphere.Density = 0.45      -- ความหนาของหมอก (ไม่มากเกินไป)
+            atmosphere.Offset = 0.1
+            atmosphere.Color = Color3.fromRGB(170, 70, 255)
+            atmosphere.Decay = Color3.fromRGB(120, 40, 180)
+            atmosphere.Glare = 0
+            atmosphere.Haze = 2.8          -- เพิ่มหมอกสีม่วง
+        else
+            if atmosphere then
+                atmosphere:Destroy()
+                atmosphere = nil
+            end
+        end
+    end
+})
+
+Tab:Toggle({
+    Title = "Remove Fog",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        if v then
+            local Lighting = game:GetService("Lighting")
+
+            -- ลบ Atmosphere
+            for _, obj in ipairs(Lighting:GetChildren()) do
+                if obj:IsA("Atmosphere") then
+                    obj:Destroy()
+                end
+            end
+
+            -- รีเซ็ตค่าหมอก
+            Lighting.FogStart = 100000
+            Lighting.FogEnd = 1000000
+            Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+
+            print("Fog Removed")
+        end
+    end
+})
+
+local Tab = Window:Tab({Title = "Combat", Icon = "sword"})
+
+Tab:Section({
+    Title = 'Aimbot:',
+})
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+-- ==================== VARIABLES ====================
+local AimbotEnabled = false
+local WallCheckEnabled = false
+local TeamCheckEnabled = false
+local AutoClickEnabled = false
+local TeleportOrbitEnabled = false
+local ShowFOVEnabled = true
+local RainbowHighlightEnabled = true
+local AimMode = "Smooth"
+local LockStyle = "Dynamic (Fov)"
+local FOV_RADIUS = 70
+local Smoothness = 0.15
+local DrawingIsAvailable = typeof(Drawing) == "table" and typeof(Drawing.new) == "function"
+local FOV_Circle
+
+-- ปุ่มลัดสำหรับการล็อกเป้า (ค่าเริ่มต้น V) สามารถเปลี่ยนผ่าน GUI ได้
+local AimKey = Enum.KeyCode.V 
+local isKeyToggled = false -- สถานะเปิด/ปิด แบบกดครั้งเดียวสลับ
+
+-- ตัวแปรสำหรับระบบล็อคเป้าค้างและ Tween วาป
+local lockedTarget = nil
+local lastTweenTime = 0
+local tweenSpeed = 0.05
+local colorHue = 0
+
+-- ==================== ESP/HIGHLIGHT SETUP ====================
+local function createHighlight(target)
+    if target and target.Character and target.Character:FindFirstChild("AimlockHighlight") then
+        target.Character:FindFirstChild("AimlockHighlight"):Destroy()
+    end
+
+    if not target or not target.Character then return end
+
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "AimlockHighlight"
+    highlight.Parent = target.Character
+    highlight.Adornee = target.Character
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.FillTransparency = 0.5
+    highlight.OutlineTransparency = 0
+    highlight.FillColor = Color3.fromHSV(0, 1, 1)
+    highlight.OutlineColor = Color3.new(1, 1, 1)
+    return highlight
+end
+
+local function removeHighlight(target)
+    if target and target.Character then
+        local hl = target.Character:FindFirstChild("AimlockHighlight")
+        if hl then hl:Destroy() end
+    end
+end
+
+-- ==================== DRAWING ====================
+if DrawingIsAvailable then
+    pcall(function()
+        FOV_Circle = Drawing.new("Circle")
+        FOV_Circle.Radius = FOV_RADIUS
+        FOV_Circle.Color = Color3.fromRGB(255,255,255)
+        FOV_Circle.Thickness = 2
+        FOV_Circle.Transparency = 1
+        FOV_Circle.Filled = false
+        FOV_Circle.Visible = false
+    end)
+end
+
+-- ==================== GUI SETTINGS ====================
+Tab:Toggle({
+    Title = "Enable Aimlock",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        AimbotEnabled = v
+        if not v then
+            removeHighlight(lockedTarget)
+            lockedTarget = nil
+        end
+        if DrawingIsAvailable and FOV_Circle then 
+            FOV_Circle.Visible = v and ShowFOVEnabled 
+        end
+    end
+})
+
+local Keybind = Tab:Keybind({
+    Title = "Keybind (Aimbot)",
+    Desc = "",
+    Value = "V",
+    Callback = function(v)
+        local success, key = pcall(function()
+            return Enum.KeyCode[v]
+        end)
+        if success and key then
+            AimKey = key
+        end
+    end
+})
+
+Tab:Toggle({
+    Title = "Show FOV Circle",
+    Desc = "",
+    Value = true,
+    Callback = function(v)
+        ShowFOVEnabled = v
+        if DrawingIsAvailable and FOV_Circle then
+            FOV_Circle.Visible = v and AimbotEnabled
+        end
+    end
+})
+
+Tab:Slider({
+    Title = "FOV Radius",
+    Desc = "Adjust FOV circle size",
+    Step = 1,
+    Value = {
+        Min = 20,
+        Max = 120,
+        Default = 70,
+    },
+    Callback = function(value)
+        FOV_RADIUS = value
+        if DrawingIsAvailable and FOV_Circle then
+            FOV_Circle.Radius = FOV_RADIUS
+        end
+    end
+})
+
+Tab:Toggle({
+    Title = "Rainbow Target ESP",
+    Desc = "",
+    Value = true,
+    Callback = function(v)
+        RainbowHighlightEnabled = v
+        if not v and lockedTarget then
+            removeHighlight(lockedTarget)
+        end
+    end
+})
+
+Tab:Dropdown({
+    Title = "Lock Style",
+    Desc = "",
+    Values = {"Dynamic (Fov)", "Sticky (keybind)"},
+    Default = "Dynamic (Fov)",
+    Callback = function(selected)
+        removeHighlight(lockedTarget)
+        LockStyle = selected
+        lockedTarget = nil
+        isKeyToggled = false
+    end
+})
+
+Tab:Dropdown({
+    Title = "Aim Mode",
+    Desc = "",
+    Values = {"Smooth", "Hard Lock"},
+    Default = "Smooth",
+    Callback = function(selected)
+        if selected == "Hard Lock" then
+            AimMode = "Hard"
+        else
+            AimMode = "Smooth"
+        end
+    end
+})
+
+Tab:Toggle({
+    Title = "Wall Check",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        WallCheckEnabled = v
+    end
+})
+
+Tab:Toggle({
+    Title = "Team Check",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        TeamCheckEnabled = v
+    end
+})
+
+Tab:Toggle({
+    Title = "Auto shoot",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        AutoClickEnabled = v
+    end
+})
+
+Tab:Toggle({
+    Title = "Auto kill",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        TeleportOrbitEnabled = v
+        if not v then
+            removeHighlight(lockedTarget)
+            lockedTarget = nil
+        end
+    end
+})
+
+-- ==================== INPUT LISTENERS (TOGGLE MODE) ====================
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == AimKey then
+        if LockStyle == "Sticky (keybind)" then
+            -- สลับสถานะเปิด/ปิดทุกครั้งที่กดปุ่ม
+            isKeyToggled = not isKeyToggled
+            if not isKeyToggled then
+                removeHighlight(lockedTarget)
+                lockedTarget = nil
+            end
+        end
+    end
+end)
+
+-- ==================== HELPER FUNCTIONS ====================
+local function getTargetPart(character)
+    if not character then return nil end
+    return character:FindFirstChild("Head") or character:FindFirstChild("UpperTorso")
+end
+
+local function isVisible(targetPart)
+    if not targetPart then return false end
+    if not WallCheckEnabled then return true end
+    
+    local origin = Camera.CFrame.Position
+    local direction = targetPart.Position - origin
+    local rayParams = RaycastParams.new()
+    
+    local ignoreList = {LocalPlayer.Character}
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        table.insert(ignoreList, LocalPlayer.Character)
+    end
+    if targetPart.Parent then
+        table.insert(ignoreList, targetPart.Parent)
+    end
+    
+    rayParams.FilterDescendantsInstances = ignoreList
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    
+    local ok, res = pcall(function() 
+        return Workspace:Raycast(origin, direction, rayParams) 
+    end)
+    
+    if not ok or not res then return true end
+    return res.Instance:IsDescendantOf(targetPart.Parent)
+end
+
+local function isSameTeam(player)
+    if not TeamCheckEnabled then return false end
+    if player == LocalPlayer then return true end
+    if LocalPlayer.Team and player.Team then return LocalPlayer.Team == player.Team end
+    local success, same = pcall(function()
+        if player.TeamColor and LocalPlayer.TeamColor and player.TeamColor == LocalPlayer.TeamColor then
+            return true
+        end
+        return false
+    end)
+    if success and same then return true end
+    return false
+end
+
+local function getClosestTarget()
+    -- หากเลือกโหมด Sticky แต่ยังไม่ได้กดปุ่มเปิด (Toggle เป็น false) ให้คืนค่า nil
+    if LockStyle == "Sticky (keybind)" and not isKeyToggled then
+        removeHighlight(lockedTarget)
+        lockedTarget = nil
+        return nil
+    end
+
+    if LockStyle == "Sticky (keybind)" and lockedTarget and lockedTarget.Character then
+        local humanoid = lockedTarget.Character:FindFirstChild("Humanoid")
+        local targetPart = getTargetPart(lockedTarget.Character)
+        if humanoid and humanoid.Health > 0 and targetPart then
+            if not WallCheckEnabled or isVisible(targetPart) then
+                return lockedTarget
+            end
+        end
+        removeHighlight(lockedTarget)
+        lockedTarget = nil
+    end
+
+    local closestPlayer = nil
+    local shortestDistance = FOV_RADIUS
+    local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local character = player.Character
+            if character and character:FindFirstChild("Humanoid") and character.Humanoid.Health > 0 then
+                if not isSameTeam(player) then
+                    local targetPart = getTargetPart(character)
+                    if targetPart then
+                        local ok, pos, onScreen = pcall(function() 
+                            return Camera:WorldToViewportPoint(targetPart.Position) 
+                        end)
+                        
+                        if ok and onScreen then
+                            local distance = (Vector2.new(pos.X, pos.Y) - center).Magnitude
+                            if distance < shortestDistance and (not WallCheckEnabled or isVisible(targetPart)) then
+                                shortestDistance = distance
+                                closestPlayer = player
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if closestPlayer and closestPlayer ~= lockedTarget then
+        removeHighlight(lockedTarget)
+        lockedTarget = closestPlayer
+        if RainbowHighlightEnabled then
+            createHighlight(lockedTarget)
+        end
+    end
+
+    return closestPlayer
+end
+
+local function simulateClick()
+    pcall(function()
+        if mouse1click then mouse1click()
+        elseif mouse1press and mouse1release then mouse1press() task.wait(0.02) mouse1release()
+        elseif vim then vim:SendMouseButtonEvent(0, 0, 0, true, game, 0) task.wait(0.02) vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+        end
+    end)
+end
+
+-- ==================== MAIN LOOP ====================
+RunService.RenderStepped:Connect(function(dt)
+    local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+
+    if DrawingIsAvailable and FOV_Circle then
+        FOV_Circle.Position = center
+        FOV_Circle.Radius = FOV_RADIUS
+        FOV_Circle.Visible = AimbotEnabled and ShowFOVEnabled
+    end
+
+    colorHue = colorHue + (dt * 0.5)
+    if colorHue > 1 then colorHue = 0 end
+
+    if AimbotEnabled then
+        local target = getClosestTarget()
+        if target and target.Character then
+            local targetPart = getTargetPart(target.Character)
+            if targetPart then
+                if RainbowHighlightEnabled and target.Character:FindFirstChild("AimlockHighlight") then
+                    local hl = target.Character:FindFirstChild("AimlockHighlight")
+                    hl.FillColor = Color3.fromHSV(colorHue, 1, 1)
+                end
+
+                local ok, pos, onScreen = pcall(function()
+                    return Camera:WorldToViewportPoint(targetPart.Position)
+                end)
+                
+                if ok then
+                    pcall(function()
+                        if AimMode == "Hard" then
+                            Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, targetPart.Position)
+                        else
+                            local targetCFrame = CFrame.new(Camera.CFrame.Position, targetPart.Position)
+                            Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, Smoothness)
+                        end
+                    end)
+                    
+                    if TeleportOrbitEnabled then
+                        pcall(function()
+                            local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                            if hrp and tick() - lastTweenTime >= tweenSpeed then
+                                lastTweenTime = tick()
+                                local tPos = targetPart.Position
+                                local timeTick = tick() * 6
+                                local modeIndex = math.floor(timeTick) % 4
+                                local distanceOffset = 4
+                                local offsetPos = tPos
+                                if modeIndex == 0 then offsetPos = tPos + Vector3.new(0, 0, distanceOffset)
+                                elseif modeIndex == 1 then offsetPos = tPos + Vector3.new(0, 0, -distanceOffset)
+                                elseif modeIndex == 2 then offsetPos = tPos + Vector3.new(distanceOffset, 0, 0)
+                                elseif modeIndex == 3 then offsetPos = tPos + Vector3.new(-distanceOffset, 0, 0)
+                                end
+                                local targetCF = CFrame.new(offsetPos, Vector3.new(tPos.X, offsetPos.Y, tPos.Z))
+                                local tweenInfo = TweenInfo.new(tweenSpeed, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+                                local tween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCF})
+                                tween:Play()
+                                hrp.AssemblyLinearVelocity = Vector3.zero
+                            end
+                        end)
+                    end
+                    
+                    if AutoClickEnabled then simulateClick() end
+                end
+            else
+                removeHighlight(lockedTarget)
+                lockedTarget = nil
+            end
+        else
+            removeHighlight(lockedTarget)
+            lockedTarget = nil
+        end
+    else
+        if lockedTarget then
+            removeHighlight(lockedTarget)
+            lockedTarget = nil
+        end
+    end
+end)
+
+Tab:Section({
+    Title = 'Hitbox:',
+})
+
+_G.HeadSize = 10
+_G.Disabled = true
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+
+-- 🔁 ระบบขยาย Hitbox
+RunService.RenderStepped:Connect(function()
+    if not _G.Disabled then
+        for _, v in next, Players:GetPlayers() do
+            if v ~= LocalPlayer and v.Character and v.Character:FindFirstChild("HumanoidRootPart") then
+                pcall(function()
+                    local hrp = v.Character.HumanoidRootPart
+                    hrp.Size = Vector3.new(_G.HeadSize, _G.HeadSize, _G.HeadSize)
+                    hrp.Transparency = 0.9
+                    hrp.BrickColor = BrickColor.new("Institutional white")
+                    hrp.Material = Enum.Material.Neon
+                    hrp.CanCollide = false
+                end)
+            end
+        end
+    end
+end)
+
+-- ✅ ปุ่มเปิด/ปิด Hitbox
+Tab:Toggle({
+    Title = "Hitbox",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        _G.Disabled = not v
+        print("Hitbox Enabled:", v)
+    end
+})
+
+-- 🎚️ Slider ปรับขนาด Hitbox
+local Slider = Tab:Slider({
+    Title = "Hitbox Size",
+    Desc = "",
+    Step = 1,
+    Value = {
+        Min = 5,
+        Max = 100,
+        Default = 10,
+    },
+    Callback = function(value)
+        _G.HeadSize = value
+        print("HeadSize:", value)
+    end
+})
+
+local VisualTab = Window:Tab({Title = "Visual", Icon = "eye"})
+
+VisualTab:Section({
+    Title = 'Players:',
+})
+
+local ESP_Config = {
+    Enabled = false,
+    TeamCheck = false,
+    Name = false,
+    Corner = false,
+    FullBox = false, -- [เพิ่มเข้ามา] กล่องแบบเต็ม
+    HP = false,
+    Line = false,
+    Bone = false     -- [เพิ่มเข้ามา] โครงกระดูก
+}
+
+-- [[ UI Toggles ]]
+VisualTab:Toggle({
+    Title = "Enabled Esp",
+    Desc = "",
+    Value = false,
+    Callback = function(v) 
+        ESP_Config.Enabled = v 
+    end
+})
+
+VisualTab:Toggle({
+    Title = "Team Check",
+    Desc = "",
+    Value = false,
+    Callback = function(v) 
+        ESP_Config.TeamCheck = v 
+    end
+})
+
+VisualTab:Toggle({
+    Title = "Esp name",
+    Desc = "",
+    Value = false,
+    Callback = function(v) 
+        ESP_Config.Name = v 
+    end
+})
+
+VisualTab:Toggle({
+    Title = "Esp Conner",
+    Desc = "",
+    Value = false,
+    Callback = function(v) 
+        ESP_Config.Corner = v 
+    end
+})
+
+VisualTab:Toggle({
+    Title = "Esp Full Box",
+    Desc = "",
+    Value = false,
+    Callback = function(v) 
+        ESP_Config.FullBox = v 
+    end
+})
+
+VisualTab:Toggle({
+    Title = "Esp Hp",
+    Desc = "",
+    Value = false,
+    Callback = function(v) 
+        ESP_Config.HP = v 
+    end
+})
+
+VisualTab:Toggle({
+    Title = "Esp Line",
+    Desc = "",
+    Value = false,
+    Callback = function(v) 
+        ESP_Config.Line = v 
+    end
+})
+
+VisualTab:Toggle({
+    Title = "Esp Bone (Skeleton)",
+    Desc = "",
+    Value = false,
+    Callback = function(v) 
+        ESP_Config.Bone = v 
+    end
+})
+
+-- [[ ฟังก์ชันเช็คทีม ]]
+local function IsSameTeam(Player)
+    if not ESP_Config.TeamCheck then return false end
+    if Player.Team and LocalPlayer.Team and Player.Team == LocalPlayer.Team then
+        return true
+    end
+    return false
+end
+
+-- [[ ฟังก์ชันสร้าง ESP ]]
+local function CreateESP(Player)
+    local Name = Drawing.new("Text")
+    
+    local Line = Drawing.new("Line")
+    local LineOutline = Drawing.new("Line")
+    
+    local HP_Background = Drawing.new("Line")
+    local HP_Bar = Drawing.new("Line")
+    
+    -- Full Box
+    local Box = Drawing.new("Square")
+    Box.Visible = false
+    Box.Filled = false
+    Box.Thickness = 1.5
+    Box.Color = Color3.fromRGB(255, 255, 255)
+
+    -- Corners
+    local Corners = {}
+    local CornerOutlines = {}
+    for i = 1, 8 do 
+        CornerOutlines[i] = Drawing.new("Line")
+        CornerOutlines[i].Thickness = 3.5
+        CornerOutlines[i].Color = Color3.fromRGB(0, 0, 0)
+        
+        Corners[i] = Drawing.new("Line")
+        Corners[i].Thickness = 1.5
+        Corners[i].Color = Color3.fromRGB(255, 255, 255)
+    end
+
+    -- Bone (Skeleton Lines)
+    local Bones = {
+        -- Head to Spine/UpperTorso
+        { "Head", "UpperTorso" }, { "Head", "Head" }, -- R15
+        { "Head", "Torso" },                         -- R6
+        -- Upper body R15
+        { "UpperTorso", "LowerTorso" },
+        { "UpperTorso", "LeftUpperArm" }, { "LeftUpperArm", "LeftLowerArm" }, { "LeftLowerArm", "LeftHand" },
+        { "UpperTorso", "RightUpperArm" }, { "RightUpperArm", "RightLowerArm" }, { "RightLowerArm", "RightHand" },
+        -- Lower body R15
+        { "LowerTorso", "LeftUpperLeg" }, { "LeftUpperLeg", "LeftLowerLeg" }, { "LeftLowerLeg", "LeftFoot" },
+        { "LowerTorso", "RightUpperLeg" }, { "RightUpperLeg", "RightLowerLeg" }, { "RightLowerLeg", "RightFoot" },
+        -- R6 Limbs
+        { "Torso", "Left Arm" }, { "Torso", "Right Arm" },
+        { "Torso", "Left Leg" }, { "Torso", "Right Leg" }
+    }
+
+    local BoneLines = {}
+    for _, _ in pairs(Bones) do
+        local bLine = Drawing.new("Line")
+        bLine.Thickness = 1
+        bLine.Color = Color3.fromRGB(255, 255, 255)
+        bLine.Visible = false
+        table.insert(BoneLines, bLine)
+    end
+
+    local function RemoveESP()
+        Name:Remove() 
+        Line:Remove() LineOutline:Remove() 
+        HP_Background:Remove() HP_Bar:Remove()
+        Box:Remove()
+        for _, v in pairs(Corners) do v:Remove() end
+        for _, v in pairs(CornerOutlines) do v:Remove() end
+        for _, v in pairs(BoneLines) do v:Remove() end
+    end
+
+    RunService.RenderStepped:Connect(function()
+        if ESP_Config.Enabled and Player.Character and Player.Character:FindFirstChild("HumanoidRootPart") and Player ~= LocalPlayer and not IsSameTeam(Player) then
+            local Root = Player.Character.HumanoidRootPart
+            local Hum = Player.Character:FindFirstChild("Humanoid")
+            
+            local TopPos, OnScreen = Camera:WorldToViewportPoint(Root.Position + Vector3.new(0, 3, 0))
+            local BottomPos = Camera:WorldToViewportPoint(Root.Position + Vector3.new(0, -3.5, 0))
+
+            if OnScreen and Hum and Hum.Health > 0 then
+                local BoxHeight = math.abs(TopPos.Y - BottomPos.Y)
+                local BoxWidth = BoxHeight / 1.8
+                local BoxPos = Vector2.new(TopPos.X - (BoxWidth / 2), TopPos.Y)
+
+                -- [Name]
+                Name.Visible = ESP_Config.Name
+                if Name.Visible then
+                    Name.Text = Player.Name
+                    Name.Position = Vector2.new(TopPos.X, BoxPos.Y - 22)
+                    Name.Outline = true
+                    Name.Center = true
+                    Name.Size = 15
+                    Name.Font = Drawing.Fonts.UI
+                    Name.Color = Color3.fromRGB(255, 255, 255)
+                end
+
+                -- [Line to Center Top]
+                Line.Visible = ESP_Config.Line
+                LineOutline.Visible = ESP_Config.Line
+                if ESP_Config.Line then
+                    LineOutline.Thickness = 3
+                    LineOutline.From = Vector2.new(Camera.ViewportSize.X / 2, 0)
+                    LineOutline.To = Vector2.new(TopPos.X, TopPos.Y)
+                    LineOutline.Color = Color3.fromRGB(0, 0, 0)
+
+                    Line.Thickness = 1
+                    Line.From = Vector2.new(Camera.ViewportSize.X / 2, 0)
+                    Line.To = Vector2.new(TopPos.X, TopPos.Y)
+                    Line.Color = Color3.fromRGB(255, 255, 255)
+                end
+
+                -- [Full Box]
+                Box.Visible = ESP_Config.FullBox
+                if ESP_Config.FullBox then
+                    Box.Size = Vector2.new(BoxWidth, BoxHeight)
+                    Box.Position = BoxPos
+                end
+
+                -- [HP Bar]
+                HP_Background.Visible = ESP_Config.HP
+                HP_Bar.Visible = ESP_Config.HP
+                if ESP_Config.HP then
+                    local HP_X = BoxPos.X - 6
+                    local currentHeight = BoxHeight * (Hum.Health / Hum.MaxHealth)
+                    
+                    HP_Background.Thickness = 3
+                    HP_Background.From = Vector2.new(HP_X, BoxPos.Y + BoxHeight)
+                    HP_Background.To = Vector2.new(HP_X, BoxPos.Y)
+                    HP_Background.Color = Color3.fromRGB(0, 0, 0)
+
+                    HP_Bar.Thickness = 1.5
+                    HP_Bar.From = Vector2.new(HP_X, BoxPos.Y + BoxHeight)
+                    HP_Bar.To = Vector2.new(HP_X, BoxPos.Y + BoxHeight - currentHeight)
+                    HP_Bar.Color = Color3.fromRGB(255 - (Hum.Health / Hum.MaxHealth * 255), Hum.Health / Hum.MaxHealth * 255, 0)
+                end
+
+                -- [Corner Box]
+                local showCorner = ESP_Config.Corner
+                for i = 1, 8 do 
+                    Corners[i].Visible = showCorner 
+                    CornerOutlines[i].Visible = showCorner
+                end
+                
+                if showCorner then
+                    local w4 = BoxWidth / 4
+                    local h4 = BoxWidth / 4
+
+                    local function setCorner(index, f, t)
+                        CornerOutlines[index].From = f
+                        CornerOutlines[index].To = t
+                        Corners[index].From = f
+                        Corners[index].To = t
+                    end
+
+                    setCorner(1, BoxPos, BoxPos + Vector2.new(w4, 0))
+                    setCorner(2, BoxPos, BoxPos + Vector2.new(0, h4))
+                    setCorner(3, Vector2.new(BoxPos.X + BoxWidth, BoxPos.Y), Vector2.new(BoxPos.X + BoxWidth - w4, BoxPos.Y))
+                    setCorner(4, Vector2.new(BoxPos.X + BoxWidth, BoxPos.Y), Vector2.new(BoxPos.X + BoxWidth, BoxPos.Y + h4))
+                    setCorner(5, Vector2.new(BoxPos.X, BoxPos.Y + BoxHeight), Vector2.new(BoxPos.X + w4, BoxPos.Y + BoxHeight))
+                    setCorner(6, Vector2.new(BoxPos.X, BoxPos.Y + BoxHeight), Vector2.new(BoxPos.X, BoxPos.Y + BoxHeight - h4))
+                    setCorner(7, Vector2.new(BoxPos.X + BoxWidth, BoxPos.Y + BoxHeight), Vector2.new(BoxPos.X + BoxWidth - w4, BoxPos.Y + BoxHeight))
+                    setCorner(8, Vector2.new(BoxPos.X + BoxWidth, BoxPos.Y + BoxHeight), Vector2.new(BoxPos.X + BoxWidth, BoxPos.Y + BoxHeight - h4))
+                end
+
+                -- [Bone ESP]
+                if ESP_Config.Bone then
+                    for index, bonePair in ipairs(Bones) do
+                        local boneLine = BoneLines[index]
+                        local partA = Player.Character:FindFirstChild(bonePair[1])
+                        local partB = Player.Character:FindFirstChild(bonePair[2])
+
+                        if partA and partB then
+                            local posA, onScreenA = Camera:WorldToViewportPoint(partA.Position)
+                            local posB, onScreenB = Camera:WorldToViewportPoint(partB.Position)
+
+                            if onScreenA and onScreenB then
+                                boneLine.From = Vector2.new(posA.X, posA.Y)
+                                boneLine.To = Vector2.new(posB.X, posB.Y)
+                                boneLine.Visible = true
+                            else
+                                boneLine.Visible = false
+                            end
+                        else
+                            boneLine.Visible = false
+                        end
+                    end
+                else
+                    for _, boneLine in pairs(BoneLines) do
+                        boneLine.Visible = false
+                    end
+                end
+
+            else
+                Name.Visible = false 
+                Line.Visible = false LineOutline.Visible = false 
+                HP_Background.Visible = false HP_Bar.Visible = false
+                Box.Visible = false
+                for _, v in pairs(Corners) do v.Visible = false end
+                for _, v in pairs(CornerOutlines) do v.Visible = false end
+                for _, v in pairs(BoneLines) do v.Visible = false end
+            end
+        else
+            Name.Visible = false 
+            Line.Visible = false LineOutline.Visible = false 
+            HP_Background.Visible = false HP_Bar.Visible = false
+            Box.Visible = false
+            for _, v in pairs(Corners) do v.Visible = false end
+            for _, v in pairs(CornerOutlines) do v.Visible = false end
+            for _, v in pairs(BoneLines) do v.Visible = false end
+            if not (Player and Player.Parent) then RemoveESP() end
+        end
+    end)
+end
+
+for _, v in pairs(Players:GetPlayers()) do CreateESP(v) end
+Players.PlayerAdded:Connect(CreateESP)
+
+
+local Tab = Window:Tab({Title = "Player", Icon = "user"})
+
+Tab:Section({
+    Title = 'Character:',
+})
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+local CFFlyEnabled = false
+local FlySpeed = 500
+
+local flyConn
+
+local function ToggleCFFly(state)
+    CFFlyEnabled = state
+
+    local char = LocalPlayer.Character
+    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+
+    if flyConn then
+        flyConn:Disconnect()
+        flyConn = nil
+    end
+
+    if not CFFlyEnabled then
+        if humanoid then
+            humanoid.PlatformStand = false
+        end
+        return
+    end
+
+    flyConn = RunService.RenderStepped:Connect(function(dt)
+        local currentCoordChar = LocalPlayer.Character
+        local hrp = currentCoordChar and currentCoordChar:FindFirstChild("HumanoidRootPart")
+        local hum = currentCoordChar and currentCoordChar:FindFirstChildOfClass("Humanoid")
+        local cam = workspace.CurrentCamera
+        
+        if not hrp or not hum or not cam then return end
+
+        -- เปิด PlatformStand เพื่อไม่ให้ตัวละครล้มหรือโดนแรงโน้มถ่วงดึงตกลงมา
+        hum.PlatformStand = true
+
+        local moveDir = Vector3.zero
+        if UIS:IsKeyDown(Enum.KeyCode.W) then moveDir += cam.CFrame.LookVector end
+        if UIS:IsKeyDown(Enum.KeyCode.S) then moveDir -= cam.CFrame.LookVector end
+        if UIS:IsKeyDown(Enum.KeyCode.A) then moveDir -= cam.CFrame.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.D) then moveDir += cam.CFrame.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.Space) then moveDir += Vector3.new(0, 1, 0) end
+        if UIS:IsKeyDown(Enum.KeyCode.LeftControl) then moveDir -= Vector3.new(0, 1, 0) end
+
+        if moveDir.Magnitude > 0 then
+            -- เคลื่อนที่ไปตามทิศทางที่กด พร้อมหันหน้าตามกล้อง
+            local targetPos = hrp.Position + (moveDir.Unit * FlySpeed * dt)
+            hrp.CFrame = CFrame.new(targetPos, targetPos + cam.CFrame.LookVector)
+        else
+            -- ถ้าไม่กดปุ่ม ให้รักษาระดับ CFrame เดิมเอาไว้ (ลอยค้างอยู่กับที่)
+            hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + cam.CFrame.LookVector)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+        end
+    end)
+end
+
+-- Keybind ใน UI
+Tab:Keybind({
+    Title = "Fly",
+    Desc = "",
+    Value = "E",
+    Callback = function(key)
+        ToggleCFFly(not CFFlyEnabled)
+        print("CFFly:", CFFlyEnabled)
+    end
+})
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer
+
+local tpWalkEnabled = false
+local tpWalkSpeed = 1 -- Adjust speed multiplier as needed
+
+-- TP Walk Loop connection variable
+local tpWalkConnection
+
+Tab:Toggle({
+    Title = "TP Walk",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        tpWalkEnabled = v
+        
+        if tpWalkEnabled then
+            -- Start TP Walk loop
+            tpWalkConnection = RunService.RenderStepped:Connect(function(dt)
+                if not tpWalkEnabled then return end
+                
+                local character = player.Character
+                if character and character:FindFirstChild("HumanoidRootPart") then
+                    local humanoid = character:FindFirstChildOfClass("Humanoid")
+                    if humanoid and humanoid.MoveDirection.Magnitude > 0 then
+                        character.HumanoidRootPart.CFrame = character.HumanoidRootPart.CFrame + (humanoid.MoveDirection * tpWalkSpeed * dt * 50)
+                    end
+                end
+            end)
+        else
+            -- Disconnect loop when turned off
+            if tpWalkConnection then
+                tpWalkConnection:Disconnect()
+                tpWalkConnection = nil
+            end
+        end
+    end
+})
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer
+
+local noclipEnabled = false
+local noclipConnection
+
+Tab:Toggle({
+    Title = "Noclip",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        noclipEnabled = v
+        
+        if noclipEnabled then
+            -- Start Noclip loop
+            noclipConnection = RunService.Stepped:Connect(function()
+                if not noclipEnabled then return end
+                
+                local character = player.Character
+                if character then
+                    for _, part in ipairs(character:GetDescendants()) do
+                        if part:IsA("BasePart") and part.CanCollide then
+                            part.CanCollide = false
+                        end
+                    end
+                end
+            end)
+        else
+            -- Disconnect loop when turned off
+            if noclipConnection then
+                noclipConnection:Disconnect()
+                noclipConnection = nil
+            end
+            
+            -- Optional: Restore collision status when turning off (respawn will also fix it)
+            local character = player.Character
+            if character then
+                for _, part in ipairs(character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = true
+                    end
+                end
+            end
+        end
+    end
+})
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local player = Players.LocalPlayer
+
+local highJumpEnabled = false
+local jumpConnection
+
+Tab:Toggle({
+    Title = "High Jump",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        highJumpEnabled = v
+        
+        if highJumpEnabled then
+            -- Connect to Jump request / Input
+            jumpConnection = UserInputService.JumpRequest:Connect(function()
+                if not highJumpEnabled then return end
+                
+                local character = player.Character
+                if character then
+                    local humanoid = character:FindFirstChildOfClass("Humanoid")
+                    if humanoid then
+                        -- Forces an immediate jump action in mid-air
+                        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                    end
+                end
+            end)
+        else
+            -- Disconnect loop when turned off
+            if jumpConnection then
+                jumpConnection:Disconnect()
+                jumpConnection = nil
+            end
+        end
+    end
+})
+
+-- Spin Bot - ทำให้ตัวละครหมุนอย่างรวดเร็ว (รองรับการเกิดใหม่)
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local localPlayer = Players.LocalPlayer
+
+local spinEnabled = false
+local spinConnection = nil
+local spinSpeed = 500 -- ความเร็วในการหมุน (องศาต่อเฟรม)
+
+-- ฟังก์ชันหมุน
+local function startSpin()
+    if spinConnection then
+        spinConnection:Disconnect()
+        spinConnection = nil
+    end
+    
+    spinConnection = RunService.Heartbeat:Connect(function()
+        if spinEnabled then
+            local character = localPlayer.Character
+            local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
+            
+            if humanoidRootPart then
+                -- หมุนรอบแกน Y (แนวตั้ง)
+                humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.Angles(0, math.rad(spinSpeed), 0)
+            end
+        end
+    end)
+end
+
+-- ฟังก์ชันหยุดหมุน
+local function stopSpin()
+    if spinConnection then
+        spinConnection:Disconnect()
+        spinConnection = nil
+    end
+end
+
+-- ฟังก์ชันเปิด/ปิด Spin
+local function toggleSpin(enable)
+    spinEnabled = enable
+    
+    if enable then
+        startSpin()
+        print("🔄 Spin Bot เปิดใช้งาน! หมุนด้วยความเร็ว:", spinSpeed, "องศา/เฟรม")
+    else
+        stopSpin()
+        print("⏹️ Spin Bot ปิดใช้งาน")
+    end
+end
+
+-- ติดตามเมื่อตัวละครเกิดใหม่
+localPlayer.CharacterAdded:Connect(function(newCharacter)
+    -- รอให้ตัวละครโหลด HumanoidRootPart ให้เรียบร้อยก่อน
+    local humanoidRootPart = newCharacter:WaitForChild("HumanoidRootPart", 5)
+    
+    -- ถ้าเปิด Spin ค้างไว้ ให้ทำการหมุนต่ออัตโนมัติ
+    if spinEnabled and humanoidRootPart then
+        startSpin()
+    end
+end)
+
+-- UI Toggle
+Tab:Toggle({
+    Title = "Spin Bot",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        print("Spin Bot:", v)
+        toggleSpin(v)
+    end
+})
+
+Tab:Section({
+    Title = 'Animation:',
+})
+
+local Players = game:GetService("Players")
+local plr = Players.LocalPlayer
+
+local enabled = false
+local currentTracks = {}
+local connections = {}
+
+-- รายชื่อแอนิเมชั่นทั้งหมด 20 แบบ
+local ANIM_OPTIONS = {
+    "Zombie", "Ninja", "Mage", "Superhero", "Robot", 
+    "Vampire", "Werewolf", "Levitation", "Toy", "Bubbly", 
+    "Cartoony", "Astronaut", "Elder", "Knight", "Pirate", 
+    "Stylish", "Rthro", "Oldschool", "Patriot", "Cowboy"
+}
+
+-- ID ของแต่ละแพ็ก
+local ANIM_IDS = {
+    Zombie = { idle = "rbxassetid://616158929", walk = "rbxassetid://616163682", run = "rbxassetid://616163682", jump = "rbxassetid://616161997", fall = "rbxassetid://616157476", climb = "rbxassetid://616156119", sit = "rbxassetid://616160636" },
+    Ninja = { idle = "rbxassetid://656117400", walk = "rbxassetid://656121766", run = "rbxassetid://656118852", jump = "rbxassetid://656117878", fall = "rbxassetid://656115606", climb = "rbxassetid://656114359", sit = "rbxassetid://656118852" },
+    Mage = { idle = "rbxassetid://707742142", walk = "rbxassetid://707743888", run = "rbxassetid://707742763", jump = "rbxassetid://707742565", fall = "rbxassetid://707742021", climb = "rbxassetid://707741962", sit = "rbxassetid://707743639" },
+    Superhero = { idle = "rbxassetid://616111295", walk = "rbxassetid://616121730", run = "rbxassetid://616117002", jump = "rbxassetid://616115533", fall = "rbxassetid://616108009", climb = "rbxassetid://616104706", sit = "rbxassetid://616113702" },
+    Robot = { idle = "rbxassetid://616088211", walk = "rbxassetid://616095330", run = "rbxassetid://616091591", jump = "rbxassetid://616090553", fall = "rbxassetid://616087085", climb = "rbxassetid://616085520", sit = "rbxassetid://616089539" },
+    Vampire = { idle = "rbxassetid://1083195504", walk = "rbxassetid://1083178841", run = "rbxassetid://1083177107", jump = "rbxassetid://1083180500", fall = "rbxassetid://1083173089", climb = "rbxassetid://1083171801", sit = "rbxassetid://1083183021" },
+    Werewolf = { idle = "rbxassetid://1083214717", walk = "rbxassetid://1083201995", run = "rbxassetid://1083199027", jump = "rbxassetid://1083205771", fall = "rbxassetid://1083197499", climb = "rbxassetid://1083195998", sit = "rbxassetid://1083207098" },
+    Levitation = { idle = "rbxassetid://1026118107", walk = "rbxassetid://1026133098", run = "rbxassetid://1026131920", jump = "rbxassetid://1026130983", fall = "rbxassetid://1026125021", climb = "rbxassetid://1026123088", sit = "rbxassetid://1026132955" },
+    Toy = { idle = "rbxassetid://782841498", walk = "rbxassetid://782843345", run = "rbxassetid://782842708", jump = "rbxassetid://782842303", fall = "rbxassetid://782841270", climb = "rbxassetid://782840586", sit = "rbxassetid://782843086" },
+    Bubbly = { idle = "rbxassetid://910004836", walk = "rbxassetid://910034870", run = "rbxassetid://910025107", jump = "rbxassetid://910016857", fall = "rbxassetid://910001963", climb = "rbxassetid://852656345", sit = "rbxassetid://910031233" },
+    Cartoony = { idle = "rbxassetid://742637594", walk = "rbxassetid://742640112", run = "rbxassetid://742638842", jump = "rbxassetid://742637933", fall = "rbxassetid://742637151", climb = "rbxassetid://742636889", sit = "rbxassetid://742638481" },
+    Astronaut = { idle = "rbxassetid://891621377", walk = "rbxassetid://891633457", run = "rbxassetid://891631440", jump = "rbxassetid://891627522", fall = "rbxassetid://891617990", climb = "rbxassetid://891615783", sit = "rbxassetid://891630119" },
+    Elder = { idle = "rbxassetid://845397899", walk = "rbxassetid://845404149", run = "rbxassetid://845401617", jump = "rbxassetid://845399880", fall = "rbxassetid://845396594", climb = "rbxassetid://845395383", sit = "rbxassetid://845400977" },
+    Knight = { idle = "rbxassetid://657595757", walk = "rbxassetid://657603401", run = "rbxassetid://657599423", jump = "rbxassetid://657598353", fall = "rbxassetid://657594617", climb = "rbxassetid://657592383", sit = "rbxassetid://657600779" },
+    Pirate = { idle = "rbxassetid://750781874", walk = "rbxassetid://750785693", run = "rbxassetid://750783738", jump = "rbxassetid://750782809", fall = "rbxassetid://750780242", climb = "rbxassetid://750779301", sit = "rbxassetid://750784835" },
+    Stylish = { idle = "rbxassetid://616136790", walk = "rbxassetid://616146106", run = "rbxassetid://616140816", jump = "rbxassetid://616139451", fall = "rbxassetid://616134813", climb = "rbxassetid://616133594", sit = "rbxassetid://616135546" },
+    Rthro = { idle = "rbxassetid://1050303080", walk = "rbxassetid://1050304550", run = "rbxassetid://1050306151", jump = "rbxassetid://1050302309", fall = "rbxassetid://1050294132", climb = "rbxassetid://1050292020", sit = "rbxassetid://1050305099" },
+    Oldschool = { idle = "rbxassetid://5286133465", walk = "rbxassetid://5286142104", run = "rbxassetid://5286146181", jump = "rbxassetid://5286149975", fall = "rbxassetid://5286144887", climb = "rbxassetid://5286138127", sit = "rbxassetid://5286152002" },
+    Patriot = { idle = "rbxassetid://1095960301", walk = "rbxassetid://1095966648", run = "rbxassetid://1095964413", jump = "rbxassetid://1095963391", fall = "rbxassetid://1095958939", climb = "rbxassetid://1095957036", sit = "rbxassetid://1095965618" },
+    Cowboy = { idle = "rbxassetid://1092131411", walk = "rbxassetid://1092144595", run = "rbxassetid://1092140608", jump = "rbxassetid://1092137720", fall = "rbxassetid://1092127909", climb = "rbxassetid://1092125577", sit = "rbxassetid://1092142127" }
+}
+
+-- ค่าเริ่มต้นของแต่ละท่า
+local selectedAnims = {
+    idle = "Zombie", walk = "Zombie", run = "Zombie",
+    jump = "Zombie", fall = "Zombie", climb = "Zombie", sit = "Zombie"
+}
+
+local function stopAll()
+    for _, track in pairs(currentTracks) do
+        pcall(function() track:Stop() end)
+    end
+    currentTracks = {}
+
+    for _, c in pairs(connections) do
+        pcall(function() c:Disconnect() end)
+    end
+    connections = {}
+end
+
+local function applyCustomAnimations(char)
+    stopAll()
+    if not enabled then return end
+
+    local humanoid = char:WaitForChild("Humanoid")
+    local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+
+    -- ปิด Animate script ดั้งเดิมของ Roblox
+    local animateScript = char:FindFirstChild("Animate")
+    if animateScript then
+        animateScript.Enabled = false
+    end
+
+    local tracks = {}
+    for animType, packName in pairs(selectedAnims) do
+        local packData = ANIM_IDS[packName] or ANIM_IDS["Zombie"]
+        local id = packData[animType]
+        if id then
+            local anim = Instance.new("Animation")
+            anim.AnimationId = id
+            local track = animator:LoadAnimation(anim)
+            
+            -- ปรับ Priority ของ Idle ให้เป็น Core เพื่อไม่ให้ไปกวนมือเวลาถือปืน/Tool
+            if animType == "idle" then
+                track.Priority = Enum.AnimationPriority.Core
+            elseif animType == "walk" or animType == "run" then
+                track.Priority = Enum.AnimationPriority.Movement
+            else
+                track.Priority = Enum.AnimationPriority.Action
+            end
+            
+            tracks[animType] = track
+        end
+    end
+
+    currentTracks = tracks
+    local current = nil
+
+    local function play(name)
+        if not enabled then return end
+        if not tracks[name] then return end
+        if current == name then return end
+        
+        if current and tracks[current] then
+            tracks[current]:Stop()
+        end
+        current = name
+        tracks[name]:Play()
+    end
+
+    table.insert(connections,
+        humanoid.Running:Connect(function(speed)
+            if not enabled then return end
+            if speed < 1 then
+                play("idle")
+            else
+                play("walk")
+            end
+        end)
+    )
+
+    table.insert(connections,
+        humanoid.StateChanged:Connect(function(_, new)
+            if not enabled then return end
+            if new == Enum.HumanoidStateType.Jumping then
+                play("jump")
+            elseif new == Enum.HumanoidStateType.Freefall then
+                play("fall")
+            elseif new == Enum.HumanoidStateType.Climbing then
+                play("climb")
+            elseif new == Enum.HumanoidStateType.Seated then
+                play("sit")
+            end
+        end)
+    )
+
+    play("idle")
+end
+
+-- =========================
+-- UI SELECTION
+-- =========================
+
+Tab:Dropdown({
+    Title = "Idle Animation (ยืนนิ่ง)",
+    Values = ANIM_OPTIONS,
+    Value = "Zombie",
+    Callback = function(v)
+        selectedAnims.idle = v
+        if enabled and plr.Character then applyCustomAnimations(plr.Character) end
+    end
+})
+
+Tab:Dropdown({
+    Title = "Walk Animation (เดิน)",
+    Values = ANIM_OPTIONS,
+    Value = "Zombie",
+    Callback = function(v)
+        selectedAnims.walk = v
+        if enabled and plr.Character then applyCustomAnimations(plr.Character) end
+    end
+})
+
+Tab:Dropdown({
+    Title = "Run Animation (วิ่ง)",
+    Values = ANIM_OPTIONS,
+    Value = "Zombie",
+    Callback = function(v)
+        selectedAnims.run = v
+        if enabled and plr.Character then applyCustomAnimations(plr.Character) end
+    end
+})
+
+Tab:Dropdown({
+    Title = "Jump Animation (กระโดด)",
+    Values = ANIM_OPTIONS,
+    Value = "Zombie",
+    Callback = function(v)
+        selectedAnims.jump = v
+        if enabled and plr.Character then applyCustomAnimations(plr.Character) end
+    end
+})
+
+Tab:Dropdown({
+    Title = "Fall Animation (ตกใจกลางอากาศ)",
+    Values = ANIM_OPTIONS,
+    Value = "Zombie",
+    Callback = function(v)
+        selectedAnims.fall = v
+        if enabled and plr.Character then applyCustomAnimations(plr.Character) end
+    end
+})
+
+Tab:Dropdown({
+    Title = "Climb Animation (ปีน)",
+    Values = ANIM_OPTIONS,
+    Value = "Zombie",
+    Callback = function(v)
+        selectedAnims.climb = v
+        if enabled and plr.Character then applyCustomAnimations(plr.Character) end
+    end
+})
+
+Tab:Dropdown({
+    Title = "Sit Animation (นั่ง)",
+    Values = ANIM_OPTIONS,
+    Value = "Zombie",
+    Callback = function(v)
+        selectedAnims.sit = v
+        if enabled and plr.Character then applyCustomAnimations(plr.Character) end
+    end
+})
+
+Tab:Toggle({
+    Title = "Custom Animations (เปิด/ปิด)",
+    Desc = "",
+    Value = false,
+    Callback = function(v)
+        enabled = v
+        if v then
+            if plr.Character then
+                applyCustomAnimations(plr.Character)
+            end
+        else
+            stopAll()
+            if plr.Character and plr.Character:FindFirstChild("Animate") then
+                plr.Character.Animate.Enabled = true
+            end
+        end
+    end
+})
+
+plr.CharacterAdded:Connect(function(char)
+    if enabled then
+        applyCustomAnimations(char)
+    end
+end)
+
+local ServerTab = Window:Tab({Title = "Server", Icon = "settings"})
+
+local function GetJobID()
+    return game.JobId or "Unknown"
+end
+
+local ServerCodeLabel =
+    ServerTab:Code(
+    {
+        Title = "Current Server",
+        Code = " " .. GetJobID()
+    }
+)
+
+ServerTab:Divider()
+
+ServerTab:Section(
+    {
+        Title = "Server Utilities:"
+    }
+)
+
+-- ที่มส่โค้ดเซิฟ
+local ServerCode = ""
+
+ServerTab:Input(
+    {
+        Title = "Enter Server Code",
+        Placeholder = "Paste server JobId here...",
+        Callback = function(Value)
+            ServerCode = Value
+        end
+    }
+)
+
+-- ปุ่มใส่โค้ดเซิฟ
+ServerTab:Button(
+    {
+        Title = "Join Code",
+        Icon = "log-in",
+        Callback = function()
+            if ServerCode == "" then
+                warn("ใส่codeดิน้อง")
+                return
+            end
+            local TeleportService = game:GetService("TeleportService")
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, ServerCode, game.Players.LocalPlayer)
+        end
+    }
+)
+
+ServerTab:Button(
+    {
+        Title = "Rejoin",
+        Icon = "refresh-ccw",
+        Callback = function()
+            local TeleportService = game:GetService("TeleportService")
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, game.Players.LocalPlayer)
+        end
+    }
+)
+
+ServerTab:Button(
+    {
+        Title = "Hop Server (Low Player)​",
+        Icon = "shuffle",
+        Callback = function()
+            local HttpService = game:GetService("HttpService")
+            local TeleportService = game:GetService("TeleportService")
+            local servers = {}
+            local req =
+                game:HttpGet(
+                string.format(
+                    "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100",
+                    game.PlaceId
+                )
+            )
+            local data = HttpService:JSONDecode(req)
+            if data and data.data then
+                for _, v in pairs(data.data) do
+                    if v.playing < v.maxPlayers then
+                        table.insert(servers, v.id)
+                    end
+                end
+            end
+            if #servers > 0 then
+                TeleportService:TeleportToPlaceInstance(
+                    game.PlaceId,
+                    servers[math.random(1, #servers)],
+                    game.Player.LocalPlayer
+                )
+            end
+        end
+    }
+)
+
+local Tab = Window:Tab({Title = "Teleport", Icon = "bird"})
+
+Tab:Section({
+    Title = 'Teleport:',
+})
+
+-- ตัวแปรเก็บพิกัดเริ่มต้นเป็น nil (ยังไม่ได้เซฟ)
+local savedPosition = nil
+local player = game.Players.LocalPlayer
+
+-- 1. Keybind สำหรับ "เซฟจุด" (กด C)
+local SaveKeybind = Tab:Keybind({
+    Title = "Save Position",
+    Desc = "",
+    Value = "C",
+    Callback = function(v)
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            savedPosition = player.Character.HumanoidRootPart.CFrame
+            print("บันทึกจุดวาปสำเร็จ!")
+        end
+    end
+})
+
+-- 2. Keybind สำหรับ "วาปไปจุดที่เซฟ" (กด X ตามที่คุณต้องการ)
+local TeleportKeybind = Tab:Keybind({
+    Title = "Teleport to Saved",
+    Desc = "",
+    Value = "X",
+    Callback = function(v)
+        if savedPosition and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            player.Character.HumanoidRootPart.CFrame = savedPosition
+            print("วาปไปยังจุดที่เซฟแล้ว!")
+        else
+            print("กรุณาเซฟจุด (กด C) ก่อนทำการวาป!")
+        end
+    end
+})
