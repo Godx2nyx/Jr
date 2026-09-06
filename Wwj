@@ -1512,8 +1512,8 @@ local var52 = UILibrary.New({
     Theme = UILibrary.Themes.Dark,
     Accent = UILibrary.Accents.Pink
 }):Window({
-    Title = "Yenix Exploit [ Eggs ]",
-    Subtitle = "you are a star shining on nights away",
+    Title = "Crystal x store[ Eggs ]",
+    Subtitle = "ขายตูด",
     Size = UserInputService.TouchEnabled and UDim2.fromOffset(550, 325) or UDim2.fromOffset(850, 530),
     UIBlur = false,
     Dropshadow = false
