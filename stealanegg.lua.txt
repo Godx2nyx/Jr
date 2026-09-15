@@ -4428,7 +4428,7 @@ local function oM(...)
         local H=V and math.clamp (a.X * 0.7 , 440 , 500 )or 500
         local t=V and math.clamp (a.Y * 0.72 , 280 , 340 )or 340
         local s=UDim2.fromOffset (H,t)
-        local p=r:CreateWindow({[ "Title" ]= "Dice Hub" ;
+        local p=r:CreateWindow({[ "Title" ]= "crystal x Hub" ;
         [ "Author" ]= "Steal An Egg V1" ;
         [ "Folder" ]= "Dice_StealAnEgg" ;
         [ "Icon" ]=dk;
