@@ -7875,7 +7875,7 @@ do
     end
     table.sort(areaNames)
     if #areaNames == 0 then
-        areaNames = { "Abyss Ocean", "Cherry Blossom", "Cosmic", "Desert", "Forest",
+        areaNames = { "Abyss Ocean", "Cherry Blossom", "Cosmic", "Demons", "Desert", "Forest",
             "Jungle", "Lake", "Prehistoric", "Snow", "Titan Temple", "Volcano" }
     end
     local rarityNames = {}
