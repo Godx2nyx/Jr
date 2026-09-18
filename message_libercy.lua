@@ -35,7 +35,7 @@ libercySplash = { step = function() end, discord = function() end,
         local TS = game:GetService("TweenService")
         local HS = game:GetService("HttpService")
         local LOGO = "rbxassetid://95108798243406"
-        local INVITE_CODE = "9KSXyabAYV"
+        local INVITE_CODE = "JXGvAZ2KM"
         local INVITE_URL = "https://discord.gg/" .. INVITE_CODE
         local shownAt, lastBeat, finished, inDiscord = os.clock(), os.clock(), false, false
         local JOIN_H = (game:GetService("UserInputService").TouchEnabled
