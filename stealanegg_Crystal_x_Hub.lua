@@ -4432,8 +4432,8 @@ local function oM(...)
         [ "Author" ]= "Steal An Egg V1" ;
         [ "Folder" ]= "CrystalxHub_StealAnEgg" ;
         [ "Icon" ]=dk;
-        [ "Theme" ]= "Dark" ,[ "IconSize" ]= 28 ,[ "Size" ]=s,[ "MinSize" ]=Vector2.new ( 400 , 240 );
-        [ "MaxSize" ]=Vector2.new ( 900 , 600 ),[ "Resizable" ]= true ,[ "SideBarWidth" ]=V and 140 or 160 ,[ "ToggleKey" ]=Enum.KeyCode.RightShift ;
+        [ "Theme" ]= "Dark" ,[ "IconSize" ]= 28 ,[ "Size" ]=s,[ "MinSize" ]=Vector2.new ( 540 , 480 );
+        [ "MaxSize" ]=Vector2.new ( 900 , 600 ),[ "Resizable" ]= true ,[ "SideBarWidth" ]=V and 540 or 480 ,[ "ToggleKey" ]=Enum.KeyCode.RightShift ;
         [ "IgnoreAlerts" ]= true ,[ "Topbar" ]={[ "Height" ]= 44 ,[ "ButtonsType" ]= "Default" }})
         Window=p
         p.IgnoreAlerts = true pcall(function(...)
