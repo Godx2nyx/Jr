@@ -4291,11 +4291,6 @@ local function aM(...) h.alive = false pcall(Ik)pcall(Ak)pcall(function(...) y:S
     )
 end
 
-
-
--- ==========================================
--- LIBERCY HUB [Steal An Egg] - WindUI
--- ==========================================
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 pcall(function()
@@ -4314,10 +4309,9 @@ end)
 
 local Window = WindUI:CreateWindow({
 	Title = "libercy Hub [Steal An Egg]",
-	Icon = "rbxassetid://118833096342184",
-	Author = "Israelcc",
+	Author = "Libercy Team",
 	Folder = "libercyHub_StealAnEgg",
-	Background = "rbxassetid://133044138027516",
+	Background = "rbxassetid://104697035870619",
 	Size = UDim2.fromOffset(620, 480),
 	MinSize = Vector2.new(420, 320),
 	Resizable = true,
@@ -4325,7 +4319,7 @@ local Window = WindUI:CreateWindow({
 	Theme = "LibercyGoldSolid",
 	User = { Enabled = true, Anonymous = false },
 	OpenButton = {
-		Title = "VXS",
+		Title = "libercy",
 		Icon = "",
 		CornerRadius = UDim.new(0, 16),
 		StrokeThickness = 2,
@@ -4345,7 +4339,7 @@ end)
 
 pcall(function()
 	Window:EditOpenButton({
-		Title = "VXS",
+		Title = "libercy",
 		Icon = "",
 		CornerRadius = UDim.new(0, 16),
 		StrokeThickness = 2,
@@ -4373,7 +4367,7 @@ InfoTab:Paragraph({
 })
 InfoTab:Paragraph({
 	Title = "Discord",
-	Desc = "https://discord.gg/Fn74MpzFUn",
+	Desc = "https://discord.gg/Rvb8bYnTj",
 })
 
 local StealTab = mainSec:Tab({ Title = "Auto Steal", Icon = "zap" })
