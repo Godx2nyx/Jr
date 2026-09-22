@@ -4311,7 +4311,6 @@ local Window = WindUI:CreateWindow({
 	Title = "libercy Hub [Steal An Egg]",
 	Author = "Libercy Team",
 	Folder = "libercyHub_StealAnEgg",
-	Background = "rbxassetid://104697035870619",
 	Size = UDim2.fromOffset(620, 480),
 	MinSize = Vector2.new(420, 320),
 	Resizable = true,
