@@ -221,19 +221,18 @@ end)
 local B
 if A then
     B = A:CreateWindow({
-        Title = "Juix Hub 2.2",
+        Title = "กุ๊ย Hub รับเขียนสคริปด้วยAi",
         Icon = "rbxassetid://132871398674601",
-        Author = "By Jui",
+        Author = "กุ๊ยกระโหลก",
         Folder = "JuixHub",
         Size = UDim2.fromOffset(650, 400),
-        Theme = "Dark",
         Transparent = true,
         Resizable = true,
         KeyCode = Enum.KeyCode.G
     })
 
     B:EditOpenButton({
-        Title = "JUIX HUB 2.2",
+        Title = "กดเปิดเมนูกุ๊ย",
         Icon = "rbxassetid://132871398674601",
         CornerRadius = UDim.new(0, 16),
         StrokeThickness = 2,
@@ -247,7 +246,7 @@ if A then
     })
 
     B:Tag({
-        Title = "Juix Hub 2.2 | Premium",
+        Title = "กุ๊ยฮับ",
         Icon = "",
         Color = Color3.fromHex("#FFD700"),
         Radius = 13,
